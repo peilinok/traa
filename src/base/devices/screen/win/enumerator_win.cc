@@ -79,19 +79,6 @@ bool is_window_invisible_win10_background_app(HWND window) {
   return false;
 }
 
-bool is_window_responding(HWND window) {
-  // 50ms is chosen in case the system is under heavy load, but it's also not
-  // too long to delay window enumeration considerably.
-  const UINT timeout_ms = 50;
-  return ::SendMessageTimeoutW(window, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, timeout_ms, nullptr);
-}
-
-bool is_window_owned_by_current_process(HWND window) {
-  DWORD process_id;
-  ::GetWindowThreadProcessId(window, &process_id);
-  return process_id == ::GetCurrentProcessId();
-}
-
 bool is_window_maximized(HWND window, bool *result) {
   WINDOWPLACEMENT placement;
   ::memset(&placement, 0, sizeof(WINDOWPLACEMENT));
@@ -411,7 +398,7 @@ BOOL WINAPI enum_screen_source_info_proc(HWND window, LPARAM lParam) {
 
   // skip windows which are not responding unless the
   // TRAA_SCREEN_SOURCE_FLAG_NOT_IGNORE_UNRESPONSIVE flag is set.
-  if (!is_window_responding(window) &&
+  if (!capture_utils::is_window_response(window) &&
       !(param->external_flags & TRAA_SCREEN_SOURCE_FLAG_NOT_IGNORE_UNRESPONSIVE)) {
     return TRUE;
   }
@@ -429,7 +416,7 @@ BOOL WINAPI enum_screen_source_info_proc(HWND window, LPARAM lParam) {
   //
   // skip windows owned by the current process if the TRAA_SCREEN_SOURCE_FLAG_IGNORE_CURRENT_PROCESS
   // flag is set.
-  bool owned_by_current_process = is_window_owned_by_current_process(window);
+  bool owned_by_current_process = capture_utils::is_window_owned_by_current_process(window);
   if ((param->external_flags & TRAA_SCREEN_SOURCE_FLAG_IGNORE_CURRENT_PROCESS) &&
       owned_by_current_process) {
     return TRUE;
@@ -549,8 +536,9 @@ BOOL WINAPI enum_screen_source_info_proc(HWND window, LPARAM lParam) {
 
 #if 0
     if (window_info.thumbnail_data) {
-      capture_utils::dump_bmp(window_info.thumbnail_data, window_info.thumbnail_size,
-               (std::string("thumbnail_") + std::to_string(window_info.id) + ".bmp").c_str());
+      capture_utils::dump_bmp(
+          window_info.thumbnail_data, window_info.thumbnail_size,
+          (std::string("thumbnail_") + std::to_string(window_info.id) + ".bmp").c_str());
     }
 #endif
   }

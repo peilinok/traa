@@ -13,16 +13,26 @@ namespace base {
 // capture utils
 class capture_utils {
 public:
+  // dpi
+  static float get_dpi_scale(HWND window);
+
+  static bool is_dpi_aware();
+  static bool is_dpi_aware(HWND window);
+  
   // gdi
   static void dump_bmp(const uint8_t *data, const traa_size &size, const char *file_name);
 
   static bool is_window_response(HWND window);
+
+  static bool is_window_owned_by_current_process(HWND window);
 
   static bool get_window_image_by_gdi(HWND window, const traa_size &target_size, uint8_t **data,
                                       traa_size &scaled_size);
 
   // dwm
   static bool is_dwm_supported();
+
+  static bool is_dwm_composition_enabled();
 
   static bool get_window_image_by_dwm(HWND dwm_window, HWND window, const traa_size &target_size,
                                       uint8_t **data, traa_size &scaled_size);

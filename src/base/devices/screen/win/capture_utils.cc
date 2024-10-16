@@ -3,6 +3,7 @@
 #include "base/devices/screen/desktop_frame.h"
 #include "base/devices/screen/desktop_geometry.h"
 #include "base/devices/screen/utils.h"
+#include "base/devices/screen/win/scoped_object_gdi.h"
 #include "base/log/logger.h"
 #include "base/utils/win/version.h"
 
@@ -12,10 +13,41 @@
 #include <mutex>
 #include <stdio.h>
 
+#include <shellscalingapi.h>
+
 namespace traa {
 namespace base {
 
-// capture utils
+// dpi
+
+float capture_utils::get_dpi_scale(HWND window) {
+  const int dpi = ::GetDpiForWindow(window);
+  return static_cast<float>(dpi) / USER_DEFAULT_SCREEN_DPI;
+}
+
+bool capture_utils::is_dpi_aware() {
+  if (os_get_version() < version_alias::VERSION_WIN8) {
+    return true;
+  }
+
+  PROCESS_DPI_AWARENESS dpi_aware = PROCESS_DPI_UNAWARE;
+  if (SUCCEEDED(::GetProcessDpiAwareness(nullptr, &dpi_aware))) {
+    return dpi_aware != PROCESS_DPI_UNAWARE;
+  }
+
+  return false;
+}
+
+bool capture_utils::is_dpi_aware(HWND window) {
+  if (!window) {
+    return is_dpi_aware();
+  }
+
+  const int dpi = ::GetDpiForWindow(window);
+  return dpi != USER_DEFAULT_SCREEN_DPI;
+}
+
+// gdi
 
 void capture_utils::dump_bmp(const uint8_t *data, const traa_size &size, const char *file_name) {
   if (!data || size.width <= 0 || size.height <= 0) {
@@ -64,6 +96,12 @@ bool capture_utils::is_window_response(HWND window) {
   return ::SendMessageTimeoutW(window, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, timeout, nullptr) != 0;
 }
 
+bool capture_utils::is_window_owned_by_current_process(HWND window) {
+  DWORD process_id;
+  ::GetWindowThreadProcessId(window, &process_id);
+  return process_id == ::GetCurrentProcessId();
+}
+
 bool capture_utils::get_window_image_by_gdi(HWND window, const traa_size &target_size,
                                             uint8_t **data, traa_size &scaled_size) {
   RECT rect;
@@ -71,6 +109,47 @@ bool capture_utils::get_window_image_by_gdi(HWND window, const traa_size &target
     LOG_ERROR("get window rect failed: {}", ::GetLastError());
     return false;
   }
+
+  // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowrect
+  // GetWindowRect is virtualized for DPI.
+  //
+  // https://stackoverflow.com/questions/8060280/getting-an-dpi-aware-correct-rect-from-getwindowrect-from-a-external-window
+  // if the window is not owned by the current process, and the current process is not DPI aware, we
+  // need to scale the rect.
+  //
+  // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setthreaddpiawarenesscontext
+  // should we need to consider the case that the window is owned by the current process, but the
+  // aware context is not the same with current thread? they may use SetThreadDpiAwarenessContext to
+  // change the aware context after windows 10 1607.
+  //
+  // https://github.com/obsproject/obs-studio/issues/8706
+  // https://github.com/obsproject/obs-studio/blob/e9ef38e3d38e08bffcabbb59230b94baa41ede96/plugins/win-capture/window-capture.c#L604-L612
+  // obs also faced this issue, and they use SetThreadDpiAwarenessContext to change current thread's
+  // aware context to the same with the window.
+  //
+  // WTF!!!!!
+  //
+  // howerver, the dpi awareness context is set to aware for most of the time, so we do not need to
+  // consider this too much for now.
+  //
+#if 0 // !!!!!!!!!!!!!!!!!!!!!!! THIS DO NOT TAKE ANY EFFECT !!!!!!!!!!!!!!!!
+  std::unique_ptr<scoped_dpi_awareness_context> pre_awareness_context;
+  if (os_get_version() >= VERSION_WIN10_RS1) {
+    const DPI_AWARENESS_CONTEXT context = ::GetWindowDpiAwarenessContext(window);
+    pre_awareness_context.reset(
+        new scoped_dpi_awareness_context(::SetThreadDpiAwarenessContext(context)));
+  } else {
+#endif
+  if (!is_window_owned_by_current_process(window) && !is_dpi_aware()) {
+    float scale_factor = get_dpi_scale(window);
+    rect.left = static_cast<int>(rect.left * scale_factor);
+    rect.top = static_cast<int>(rect.top * scale_factor);
+    rect.right = static_cast<int>(rect.right * scale_factor);
+    rect.bottom = static_cast<int>(rect.bottom * scale_factor);
+  }
+#if 0
+  }
+#endif
 
   HDC window_dc = ::GetWindowDC(window);
   if (!window_dc) {
@@ -200,6 +279,14 @@ bool capture_utils::is_dwm_supported() {
 #else
   return true;
 #endif
+}
+
+bool capture_utils::is_dwm_composition_enabled() {
+  BOOL enabled = FALSE;
+  if (SUCCEEDED(::DwmIsCompositionEnabled(&enabled))) {
+    return enabled == TRUE;
+  }
+  return false;
 }
 
 bool capture_utils::get_window_image_by_dwm(HWND dwm_window, HWND window,
